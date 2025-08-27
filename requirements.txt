@@ -4,5 +4,4 @@ pytesseract
 pillow
 gunicorn
 numpy
-opencv-python
 opencv-python-headless
