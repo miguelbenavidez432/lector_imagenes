@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 import io
 
-reader = easyocr.Reader(['es', 'en'], gpu=False)
+reader = easyocr.Reader(['es', 'en'], gpu=False, model_storage_directory='models')
 
 class OCRAPIView(APIView):
     parser_classes = [MultiPartParser]
