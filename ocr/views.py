@@ -5,8 +5,21 @@ import easyocr
 import numpy as np
 from PIL import Image
 import io
+import os
 
-reader = easyocr.Reader(['es', 'en'], gpu=False, model_storage_directory='models')
+MODEL_DIR = 'models'
+
+EXPECTED_MODELS = [
+    'craft_mlt_25k.pth',   
+    'latin_g2.pth'         
+]
+
+missing = [f for f in EXPECTED_MODELS if not os.path.isfile(os.path.join(MODEL_DIR, f))]
+
+if missing:
+    raise FileNotFoundError(f"Faltan los siguientes modelos en '{MODEL_DIR}': {missing}")
+
+reader = easyocr.Reader(['es', 'en'], gpu=False, model_storage_directory=MODEL_DIR)
 
 class OCRAPIView(APIView):
     parser_classes = [MultiPartParser]
