@@ -28,6 +28,8 @@ class OCRAPIView(APIView):
         try:
             for image_file in image_files:
                 # Preprocesamiento
+                custom_config = r'--oem 3 --psm 4'
+
                 image = Image.open(image_file).convert('L')
                 image = image.filter(ImageFilter.MedianFilter())
                 enhancer = ImageEnhance.Contrast(image)
@@ -37,9 +39,12 @@ class OCRAPIView(APIView):
                 image_np = np.array(image)
                 _, thresh = cv2.threshold(image_np, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
+                # Invertir colores (texto oscuro sobre fondo claro)
+                inverted = cv2.bitwise_not(thresh)
+
                 # OCR
                 custom_config = r'--oem 3 --psm 6'
-                text = pytesseract.image_to_string(thresh, lang='spa', config=custom_config)
+                text = pytesseract.image_to_string(inverted, lang='eng+spa', config=custom_config)
 
                 results.append({
                     "filename": image_file.name,
