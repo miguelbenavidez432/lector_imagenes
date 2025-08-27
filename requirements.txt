@@ -3,3 +3,4 @@ djangorestframework
 pytesseract
 pillow
 gunicorn
+numpy
