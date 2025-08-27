@@ -14,13 +14,16 @@ EXPECTED_MODELS = [
     'latin_g2.pth'
 ]
 
-# Verifica que los modelos estén presentes
 missing = [f for f in EXPECTED_MODELS if not os.path.isfile(os.path.join(MODEL_DIR, f))]
 if missing:
     raise FileNotFoundError(f"Faltan los siguientes modelos en '{MODEL_DIR}': {missing}")
 
-# Crea el lector de EasyOCR una sola vez
-reader = easyocr.Reader(['es', 'en'], gpu=False, model_storage_directory=MODEL_DIR)
+reader = easyocr.Reader(
+    ['es', 'en'],
+    gpu=False,
+    model_storage_directory=MODEL_DIR,
+    download_enabled=False
+)
 
 class OCRAPIView(APIView):
     parser_classes = [MultiPartParser]
@@ -31,17 +34,13 @@ class OCRAPIView(APIView):
             return Response({'error': 'No se proporcionó ninguna imagen'}, status=400)
 
         try:
-            # Procesar imagen
             image = Image.open(image_file)
             image = image.convert('RGB')
             image_np = np.array(image)
 
-            # Utiliza el lector global
             result = reader.readtext(image_np)
 
-            # Extraer el texto
-            text_result = [item[1] for item in result]
-            return Response({'text': text_result})
-        
+            return Response({'text': [item[1] for item in result]})
+
         except Exception as e:
             return Response({'error': str(e)}, status=500)
