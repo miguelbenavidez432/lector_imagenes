@@ -28,3 +28,5 @@ __pycache__/
 # Archivos de Render/Heroku (excepto Procfile)
 *.pid
 *.seed
+/staticfiles/
+

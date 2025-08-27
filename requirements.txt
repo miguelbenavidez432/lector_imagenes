@@ -1,6 +1,5 @@
 django
 djangorestframework
-easyocr
+pytesseract
 pillow
-numpy
 gunicorn
