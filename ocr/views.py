@@ -6,6 +6,8 @@ import numpy as np
 from PIL import Image
 import io
 
+reader = easyocr.Reader(['es', 'en'], gpu=False)
+
 class OCRAPIView(APIView):
     parser_classes = [MultiPartParser]
 
@@ -22,7 +24,7 @@ class OCRAPIView(APIView):
 
             # Usar EasyOCR para procesar
             reader = easyocr.Reader(['es', 'en'])
-            result = reader.readtext(image_np)
+            result = reader.readtext(image_path)
 
             # Extraer solo el texto
             text_result = [item[1] for item in result]
