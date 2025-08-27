@@ -21,6 +21,6 @@ from django.urls import path, include
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('', include('frontend.urls')),  # Aquí se sirve el index.html en "/"
-    path('api/ocr/', include('ocr.urls')),
+    path('api/', include('ocr.urls')),
 ]
 

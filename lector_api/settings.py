@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'rest_framework',
     'ocr',
     'frontend',
+
 ]
 
 MIDDLEWARE = [
@@ -123,3 +124,7 @@ STATIC_URL = 'static/'
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# Ruta al ejecutable de Tesseract OCR
+TESSERACT_CMD = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
