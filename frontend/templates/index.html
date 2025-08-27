@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Prueba OCR</title>
+</head>
+<body>
+  <h2>Subir Imagen para OCR</h2>
+  <form action="http://127.0.0.1:8000/api/ocr/" method="post" enctype="multipart/form-data">
+    <input type="file" name="image" accept="image/*" required>
+    <button type="submit">Enviar</button>
+  </form>
+</body>
+</html>

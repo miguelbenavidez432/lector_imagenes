@@ -1,0 +1,30 @@
+# Entorno virtual
+venv/
+env/
+*.pyc
+__pycache__/
+*.pyo
+*.pyd
+*.db
+*.sqlite3
+
+# Archivos de migraciones
+*/migrations/*.py
+!*/migrations/__init__.py
+
+# Configuración local
+*.env
+.env
+
+# Archivos de logs
+*.log
+
+# Archivos de IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Archivos de Render/Heroku (excepto Procfile)
+*.pid
+*.seed
