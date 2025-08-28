@@ -15,9 +15,11 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.urls import path
-from .views import OCRAPIView
+from .views import process
+
 
 urlpatterns = [
-    path('ocr/', OCRAPIView.as_view(), name='ocr'),
+    path("ocr/", process, name="ocr-process"),
 ]
+
 
