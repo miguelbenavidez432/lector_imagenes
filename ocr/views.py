@@ -3,11 +3,11 @@ import io
 import os
 import platform
 import re
-from typing import List, Dict, Any
-
+import pytesseract
 import cv2
 import numpy as np
-import pytesseract
+import statistics
+from typing import List, Dict, Any
 from PIL import Image
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
@@ -22,6 +22,9 @@ if platform.system() == "Windows":
 # ---------- Utilidades de imagen ----------
 
 OCR_CONFIG = "--oem 3 --psm 6 -l spa+eng"
+
+REF_WIDTH = 1366
+REF_HEIGHT = 768
 
 def _pil_to_cv2(pil_img: Image.Image) -> np.ndarray:
     """PIL RGB/LA/L → OpenCV BGR/GRAYSCALE."""
@@ -55,50 +58,40 @@ def _deskew(gray: np.ndarray) -> np.ndarray:
 
 def preprocess(pil_img: Image.Image) -> np.ndarray:
     """
-    Preprocesamiento OCR optimizado con OpenCV:
+    Preprocesamiento OCR mejorado:
     - Escala de grises
-    - Suavizado leve (reduce ruido sin borrar letras)
-    - CLAHE (mejor contraste local)
-    - Binarización adaptativa
-    - Inversión (texto oscuro sobre fondo claro)
-    - Dilatación suave (engrosar letras delgadas)
+    - Aumento de resolución
+    - Filtro gaussiano suave
+    - Mejora de contraste (CLAHE)
+    - Binarización Otsu (no adaptativa tan agresiva)
+    - Sin invertir ni dilatar (dejamos letras limpias)
     """
     cv_img = _pil_to_cv2(pil_img)
 
-    # Paso 1: escala de grises
+    # Escala de grises
     gray = cv2.cvtColor(cv_img, cv2.COLOR_BGR2GRAY) if len(cv_img.shape) == 3 else cv_img
 
-    # Paso 2: Suavizado sin perder bordes (reduce ruido sin borrar texto)
-    gray = cv2.bilateralFilter(gray, d=9, sigmaColor=75, sigmaSpace=75)
+    # Reescalar para ganar detalle
+    gray = cv2.resize(gray, None, fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
 
-    # Paso 3: Contraste local (mejora letras sobre fondo sucio)
-    clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(8, 8))
+    # Suavizado leve
+    gray = cv2.GaussianBlur(gray, (3, 3), 0)
+
+    # Contraste local
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     gray = clahe.apply(gray)
 
-    # Paso 4: Binarización adaptativa
-    bw = cv2.adaptiveThreshold(
-        gray,
-        maxValue=255,
-        adaptiveMethod=cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        thresholdType=cv2.THRESH_BINARY,
-        blockSize=31,
-        C=10
-    )
-
-    # Paso 5: Invertimos (texto blanco sobre negro)
-    bw = 255 - bw
-
-    # Paso 6: Dilatación leve horizontal (letras finas o partidas)
-    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 1))
-    bw = cv2.dilate(bw, kernel, iterations=1)
+    # Binarización Otsu
+    _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     return bw
+
 
 
 # ---------- OCR + parsing ----------
 
 SCALE = 1.0  # en lugar de 2.0
-ORIGINAL_Y1, ORIGINAL_Y2 = 140, 615
+ORIGINAL_Y1, ORIGINAL_Y2 = 200, 730
 
 # Coordenadas globales para columnas
 y1, y2 = int(ORIGINAL_Y1 * SCALE), int(ORIGINAL_Y2 * SCALE)  # Coordenadas Y comunes a todas las columnas
@@ -215,37 +208,41 @@ def extract_stats_from_image(image: np.ndarray, num_rows: int = 20) -> List[Dict
     else:
         gray = image.copy()
 
+    # Paso 1: Binarizamos sin invertir aún
+    _, binary = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
     # Invertimos si es texto blanco sobre negro
-    mean_val = np.mean(gray)
-    if mean_val < 127:
-        gray = 255 - gray
+    if np.mean(binary) < 127:
+        binary = 255 - binary
 
     # Binarizar
-    _, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    #_, bw = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     # Paso 2: detectar líneas horizontales y verticales
-    horizontal = bw.copy()
-    vertical = bw.copy()
+    horizontal = binary.copy()
+    vertical = binary.copy()
 
-    # Kernel horizontal (líneas de filas)
-    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))
+    h_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (40, 1))  # ancho de líneas horizontales
+    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 20))  # alto de líneas verticales
+
     horizontal = cv2.erode(horizontal, h_kernel, iterations=1)
     horizontal = cv2.dilate(horizontal, h_kernel, iterations=1)
 
-    # Kernel vertical (líneas de columnas)
-    v_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (1, 20))
     vertical = cv2.erode(vertical, v_kernel, iterations=1)
     vertical = cv2.dilate(vertical, v_kernel, iterations=1)
-
+   
     # Paso 3: encontrar intersecciones (esquinas de celdas)
-    mask = cv2.bitwise_and(horizontal, vertical)
-    contours, _ = cv2.findContours(mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
+     # Paso 3: Intersecciones (esquinas de celdas)
+    table_mask = cv2.bitwise_and(horizontal, vertical)
 
-    # Paso 4: detectar bounding boxes (celdas)
+    # Para visualizar la detección (debug opcional)
+    debug_img = cv2.cvtColor(binary, cv2.COLOR_GRAY2BGR)
+
+    contours, _ = cv2.findContours(table_mask, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_SIMPLE)
     boxes = [cv2.boundingRect(c) for c in contours]
-    boxes = sorted(boxes, key=lambda b: (b[1], b[0]))  # orden: y, luego x
+    boxes = sorted(boxes, key=lambda b: (b[1], b[0]))
 
-    # Agrupar por filas
+    # Agrupamos por filas usando tolerancia vertical
     rows = []
     current_row = []
     last_y = -1
@@ -253,6 +250,9 @@ def extract_stats_from_image(image: np.ndarray, num_rows: int = 20) -> List[Dict
 
     for box in boxes:
         x, y, w, h = box
+        if w < 20 or h < 15:
+            continue  # ignorar cajas demasiado pequeñas (ruido)
+
         if last_y == -1 or abs(y - last_y) <= tolerance:
             current_row.append(box)
             last_y = y
@@ -263,18 +263,28 @@ def extract_stats_from_image(image: np.ndarray, num_rows: int = 20) -> List[Dict
     if current_row:
         rows.append(sorted(current_row, key=lambda b: b[0]))
 
-    # Paso 5: extraer texto por celda
-    player_dicts = []
+    # Paso 4: extraer texto por celda
+    results = []
     for row in rows:
         player = {}
         for idx, (x, y, w, h) in enumerate(row):
             cell = gray[y:y + h, x:x + w]
             cell = cv2.copyMakeBorder(cell, 5, 5, 5, 5, cv2.BORDER_CONSTANT, value=255)
-            text = pytesseract.image_to_string(cell, config=OCR_CONFIG).strip()
-            player[f"col_{idx}"] = text
-        player_dicts.append(player)
 
-    return player_dicts
+            text = pytesseract.image_to_string(cell, config=OCR_CONFIG).strip()
+
+            player[f"col_{idx}"] = text
+
+            # Para visualizar (opcional)
+            cv2.rectangle(debug_img, (x, y), (x + w, y + h), (0, 255, 0), 1)
+
+        if player:
+            results.append(player)
+
+    # Guardar imagen de debug
+    cv2.imwrite("debug_detected_cells.jpg", debug_img)
+
+    return results
 
 
 def ocr_from_roi(proc: np.ndarray, y1: int, y2: int, x1: int, x2: int) -> List[Dict[str, Any]]:
@@ -358,26 +368,135 @@ def parse_players(lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
 
     return players
 
+def scale_coords_for_image(img_w: int, img_h: int, columns: dict):
+    """Devuelve un nuevo dict de columnas y y1/y2 escaladas a la imagen actual."""
+    sx = img_w / REF_WIDTH
+    sy = img_h / REF_HEIGHT
+    scaled = {}
+    for k, (x1, x2) in columns.items():
+        scaled[k] = (int(round(x1 * sx)), int(round(x2 * sx)))
+    return scaled, int(round(ORIGINAL_Y1 * sy)), int(round(ORIGINAL_Y2 * sy))
+
+def ensure_ocr_orientation(img: np.ndarray) -> np.ndarray:
+    """
+    Asegura que la imagen para Tesseract tenga texto oscuro sobre fondo claro.
+    Si recibimos texto claro sobre oscuro, lo invertimos.
+    """
+    # img se espera GRAY (uint8)
+    mean_val = np.mean(img)
+    # Si la media es baja (imagen mayormente negra), invertimos para que tenga fondo claro.
+    if mean_val < 127:
+        return 255 - img
+    return img
+
+def extract_name_lines(ocr_img: np.ndarray, x1: int, x2: int, y1: int, y2: int):
+    """
+    Extrae líneas (texto y coordenada Y) de la columna 'nombre' usando image_to_data.
+    Retorna lista ordenada por Y: [{"text": "...", "y": ..., "x": ...}, ...]
+    """
+    roi = ocr_img[y1:y2, x1:x2]
+    # Upscale para mejorar OCR en UI pequeñas
+    roi_resized = cv2.resize(roi, (0, 0), fx=2.5, fy=2.5, interpolation=cv2.INTER_CUBIC)
+    data = pytesseract.image_to_data(roi_resized, config="--oem 3 --psm 6 -l spa+eng", output_type=pytesseract.Output.DICT)
+
+    lines = {}
+    n = len(data["text"])
+    for i in range(n):
+        txt = data["text"][i].strip()
+        if not txt:
+            continue
+        # coordenadas ya en ROI_resized — convertimos a ROI unit scale
+        top = int(data["top"][i] / 2.5)  # revertir el upscale para mantener referencia en coords originales del ROI
+        left = int(data["left"][i] / 2.5)
+        key = data["line_num"][i]  # grouping por línea en el ROI_resized
+        entry = lines.setdefault(key, {"words": [], "tops": [], "lefts": []})
+        entry["words"].append(txt)
+        entry["tops"].append(top)
+        entry["lefts"].append(left)
+
+    out = []
+    for info in lines.values():
+        line_text = " ".join(info["words"])
+        y_rel = int(np.median(info["tops"]))
+        x_rel = int(min(info["lefts"])) if info["lefts"] else 0
+        out.append({"text": line_text, "y": y_rel + y1, "x": x_rel + x1})
+
+    out.sort(key=lambda d: d["y"])
+    return out
+
+def ocr_cell_single_line(image_gray: np.ndarray, x1: int, x2: int, y_center: int, row_h: int):
+    y_top = max(0, int(y_center - row_h // 2 - 3))
+    y_bot = min(image_gray.shape[0], int(y_center + row_h // 2 + 3))
+    x1 = max(0, x1)
+    x2 = min(image_gray.shape[1], x2)
+
+    # recorte de la celda
+    cell = image_gray[y_top:y_bot, x1:x2]
+
+    if cell.size == 0:
+        return ""
+
+    # upscale para mejorar OCR
+    cell = cv2.resize(cell, (0, 0), fx=2, fy=2, interpolation=cv2.INTER_CUBIC)
+
+    # pequeño preprocesado
+    _, cell_bw = cv2.threshold(cell, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    if np.mean(cell_bw) < 127:  # invertir si quedó blanco sobre negro
+        cell_bw = 255 - cell_bw
+
+    txt = pytesseract.image_to_string(
+        cell_bw,
+        config="--oem 3 --psm 7 -l spa+eng"
+    )
+    return txt.strip()
+
+
+def extract_table_by_name_reference(image_gray: np.ndarray, columns_scaled: dict, y1: int, y2: int):
+    """
+    Strategy:
+      - extraer líneas en columna 'nombre'
+      - estimar altura de fila por mediana de diffs de Y
+      - para cada fila, recortar otras columnas y OCR (psm 7)
+    """
+    name_x1, name_x2 = columns_scaled["nombre"]
+    names = extract_name_lines(image_gray, name_x1, name_x2, y1, y2)
+
+    if not names:
+        return []  # fallback más abajo
+
+    # Calcular row_h (estimación de altura de fila)
+    ys = [n["y"] for n in names]
+    if len(ys) >= 2:
+        diffs = [j - i for i, j in zip(ys[:-1], ys[1:]) if j - i > 3]
+        row_h = int(statistics.median(diffs)) if diffs else 30
+    else:
+        row_h = 30
+
+    results = []
+    for nm in names:
+        row_y = nm["y"]
+        row = {"name": nm["text"]}
+
+        for key in columns_scaled:
+            if key == "nombre":
+                continue
+            x1, x2 = columns_scaled[key]
+            val = ocr_cell_single_line(image_gray, x1, x2, row_y, row_h)
+
+            # --- DEBUG OPCIONAL ---
+            cell_dbg = image_gray[max(0, row_y - row_h//2): row_y + row_h//2, x1:x2]
+            os.makedirs("debug_cells", exist_ok=True)
+            cv2.imwrite(f"debug_cells/{key}_{nm['text']}.jpg", cell_dbg)
+            # ----------------------
+
+            row[key] = val
+        results.append(row)
+
+    return results
+
 # ---------- Vista principal ----------
 
 class OCRAPIView(APIView):
-    """
-    POST /api/ocr/
-      Form-data:
-        - image (una sola)  o  images[] (múltiples)
-      Respuesta:
-      {
-        "results": [
-          {
-            "filename": "...",
-            "raw_text": "...",
-            "players": [{"name":"...", "rating": 7.4}, ...]
-          },
-          ...
-        ],
-        "consolidated_players": [{"name":"...", "rating": 7.4}, ...]  # union por nombre
-      }
-    """
     parser_classes = [MultiPartParser]
 
     def post(self, request, format=None):
@@ -394,31 +513,49 @@ class OCRAPIView(APIView):
         try:
             for f in files:
                 pil = Image.open(f.stream if hasattr(f, "stream") else f).convert("RGB")
-                proc = preprocess(pil)
+                proc = preprocess(pil)  # tu preprocess retorna BINARIA (en mi versión original era texto blanco sobre negro)
 
-                if proc is None or proc.shape[0] < y2 or proc.shape[1] < max(x2 for (_, x2) in columns.values()):
-                    return Response({"error": "La imagen es demasiado pequeña para los rangos definidos"}, status=400)
+                # convertir a gris si es binaria a color
+                if len(proc.shape) == 3:
+                    gray = cv2.cvtColor(proc, cv2.COLOR_BGR2GRAY)
+                else:
+                    gray = proc.copy()
 
+                img_h, img_w = gray.shape[:2]
+                columns_scaled, sy1, sy2 = scale_coords_for_image(img_w, img_h, columns)
 
-                debug = cv2.cvtColor(proc, cv2.COLOR_GRAY2BGR)
-                for key, (x1, x2) in columns.items():
-                    cv2.rectangle(debug, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                cv2.imwrite("debug_zonas_original_scale.jpg", debug)
+                # preparamos imagen para OCR: texto oscuro sobre fondo claro (Tesseract prefiere así)
+                ocr_ready = ensure_ocr_orientation(gray)
 
+                # guarda debug de las zonas escaladas
+                debug = cv2.cvtColor(ocr_ready, cv2.COLOR_GRAY2BGR)
+                for key, (x1, x2) in columns_scaled.items():
+                    cv2.rectangle(debug, (x1, sy1), (x2, sy2), (0, 255, 0), 2)
+                cv2.imwrite("debug_zonas_scaled.jpg", debug)
+                cv2.imwrite("debug_proc.jpg", ocr_ready)
 
-                # Guardar para debug (opcional)
-                cv2.imwrite("debug_proc.jpg", proc)
+                # EXTRACCIÓN usando columna 'nombre' como referencia
+                players_stats = extract_table_by_name_reference(ocr_ready, columns_scaled, sy1, sy2)
 
-                # Usar función correcta que extrae columnas por coordenadas
-                players_stats = extract_stats_from_image(proc, num_rows=20)
-
-                all_results.append({
-                    "filename": getattr(f, "name", "image"),
-                    "players": players_stats
-                })
+                # Si no encontramos nombres (fallback): intentar OCR global agrupado por Y
+                if not players_stats:
+                    # fallback simple: OCR full area y agrupar por Y (más costoso)
+                    full_roi = ocr_ready[sy1:sy2, :]
+                    data = pytesseract.image_to_data(full_roi, config=OCR_CONFIG, output_type=pytesseract.Output.DICT)
+                    # ... podrías implementar grouping similar; por ahora devolvemos raw_text
+                    full_text = pytesseract.image_to_string(full_roi, config=OCR_CONFIG)
+                    all_results.append({
+                        "filename": getattr(f, "name", "image"),
+                        "raw_text": full_text,
+                        "players": []
+                    })
+                else:
+                    all_results.append({
+                        "filename": getattr(f, "name", "image"),
+                        "players": players_stats
+                    })
 
             return Response({"results": all_results})
 
         except Exception as e:
             return Response({"error": str(e)}, status=500)
-
